@@ -1,0 +1,9 @@
+Configured application.properties as below
+spring.application.name=banking-api
+server.port=8080
+spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:9000
+
+When configured with issuer-uri, Spring Security can discover the issuer’s
+public-key endpoint and validate the JWT’s signature and issuer.
+
+========================

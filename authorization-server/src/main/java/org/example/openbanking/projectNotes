@@ -1,0 +1,189 @@
+  Why use a repository?
+  The authorisation server needs to look up registered clients when they request tokens.
+  The repository provides that lookup mechanism.
+ ==========
+ Create SecurityConfig.java
+
+ First, let’s understand what we’re configuring.
+
+ Your application needs to perform three main tasks:
+
+ 1. Register clients — identify which applications are allowed to request tokens.
+ 2. Issue JWTs — generate signed access tokens for authorised clients.
+ 3. Secure OAuth endpoints — configure the endpoints used for token issuance and other authorisation server operations.
+
+==========
+Configure the Authorisation Server
+
+At the moment, you’ve registered a client called demo-tpp. However, Spring still needs to know which HTTP
+requests should be handled by the OAuth 2.0 Authorisation Server.
+Understand what we’ve added
+A. SecurityFilterChain
+
+Think of this as the HTTP security pipeline.
+When a request reaches your application, Spring Security uses its filter chains to determine
+how the request should be handled.
+======================
+securityChainConfiguration
+
+.securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
+matches requests to the Authorisation Server’s configured endpoints.
+For example, the token endpoint is:
+/oauth2/token
+
+============
+
+3. What about the JWT signing key?
+1. Why do we need a signing key?
+When your Authorisation Server issues a JWT, it needs to sign the token so that the
+Banking API can verify that the token was issued by a trusted source and hasn’t been tampered with.
+We’ll use RSA public-key cryptography.
+
+The process works like this:
+1. The Authorisation Server uses an RSA private key to sign the JWT.
+2. The client receives the signed JWT.
+3. The client sends the JWT to the Banking API.
+4. The Banking API uses the corresponding RSA public key to verify the signature.
+The private key must remain secret. The public key can be shared with services that need to verify tokens.
+================
+now Authorization server shares the JWT to client
+Your access token has three parts:
+HEADER.PAYLOAD.SIGNATURE
+
+eyJraWQiOi... . eyJzdWIiOi... . E84R4qAePA...
+      │                │                │
+    Header           Payload         Signature
+
+ typically, a payload has
+ {
+   "sub": "demo-tpp",
+   "aud": "demo-tpp",
+   "scope": ["accounts:read"],
+   "iss": "http://localhost:9000",
+   "exp": 1792864599,
+   "iat": 1792864299,
+   "jti": "423e81a3-b4ab-46e5-ade0-cd6f933370a2"
+ }These are called claims. Claims describe the subject, intended audience, permissions, issuer and token lifetime.
+ iat = Time the token was issued.
+ jti = Unique identifier for this token.
+ Subject — who the token represents -- "demo-tpp"
+ Issuer — who issued the token -- "http://localhost:9000"
+ Audience — who the token is intended for -- "banking-api"
+ These claims are encoded, not encrypted, in an ordinary signed JWT.
+ Anyone possessing the token can generally decode and read its payload, so sensitive information such as
+ passwords must not be placed there.
+
+
+ Signature:
+ Conceptually, your authorisation server signs the encoded header and payload:
+ Signature = Sign(
+     Base64URL(Header) + "." + Base64URL(Payload),
+     PrivateKey
+ )
+ This is a conceptual representation of signing, not literal Java code.
+ Your server uses its private key to sign the JWT. BankingAPI uses the corresponding public key to verify the signature.
+ If someone changes a claim in the payload without producing a valid new signature, verification fails.
+==============
+Token response from AuthServer
+A JSON response with below fields
+{
+  "access_token": "<your JWT>",
+  "token_type": "Bearer",
+  "expires_in": 299,
+  "scope": "accounts:read"
+}These fields belong to the OAuth 2.0 token response, not to the JWT header.
+
+
+
+=================
+
+                APPLICATION 1
+          Authorisation Server
+              localhost:9000
+                   |
+                   | 1. Client requests token
+                   | 2. Server issues JWT
+                   |
+                   v
+             OAuth 2.0 Client
+                (demo-tpp)
+                   |
+                   | 3. Sends JWT
+                   v
+                APPLICATION 2
+                 Banking API
+              localhost:8080
+                   |
+                   | 4. Validate JWT
+                   | 5. Check permissions
+                   |
+                   v
+             Return account data
+
+Notice that the Banking API doesn’t need the client’s secret or the Authorisation Server’s private signing key.
+It verifies the token using the Authorisation Server’s public key.
+This separation is an important concept for your interview.
+==============
+
+input:
+
+For our learning project, imagine a third-party application called demo-tpp that wants permission to access
+banking data.
+We’ll register it with:
+
+* Client ID: demo-tpp
+* A development-only client secret
+* Grant type: client_credentials
+* Scope: accounts:read
+
+To get token-response from Auth-server:
+curl -s -X POST http://localhost:9000/oauth2/token \
+  -u 'demo-tpp:demo-secret' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=client_credentials&scope=accounts:read'
+
+ To get account data from bankingAPi:
+ curl -i http://localhost:8080/api/account -H "Authorization: Bearer $TOKEN"
+
+TOKEN_RESPONSE=$(curl -s -X POST http://localhost:9000/oauth2/token \
+  -u 'demo-tpp:demo-secret' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=client_credentials&scope=accounts:read')
+TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | python3 -c'import json,sys; print(json.load(sys.stdin)["access_token"])')
+curl -i http://localhost:8080/api/account -H "Authorization: Bearer $TOKEN"
+
+1.BankingAPI uses the Authorisation Server’s public key to verify the token’s signature.
+It also validates the issuer and token expiry.
+
+=================
+Your current token contains:
+The access_token, has
+{
+  "sub": "demo-tpp",
+  "aud": "demo-tpp",
+  "scope": ["accounts:read"],
+  "iss": "http://localhost:9000"
+} This is part of JWT Payload portion of your token
+
+Access_token = header...payload...signature
+
+header=
+{
+  "kid": "a0a3aa90-bd27-4aaa-8b34-4dc61f789043",
+  "alg": "RS256"
+}
+kid = keyid, identifying the signing key used to sign the token
+alg = Algorithm used to sign the JWT. RS256 uses RSA with SHA-256.
+
+====================
+
+Validation
+
+Question BankingAPI asks
+Signature === Was the token signed by a trusted issuer, and has it remained unchanged?
+Issuer (iss) === Was the token issued by the expected authorisation server?
+Expiry (exp) === Has the token expired?
+Audience (aud) === Is this token intended for BankingAPI?
+Scope (scope) === Does the token grant the permission needed for this request?
+
+
